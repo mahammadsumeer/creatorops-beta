@@ -25,30 +25,30 @@ def get_secret(key: str, default: str = "") -> str:
     return default
 
 def call_llm(messages: list, temperature: float = 0.3, max_tokens: int = 5500) -> str:
-    """Tries Groq 120B -> Groq 20B -> OpenRouter Free with ASCII-safe hostnames."""
-    groq_host = "".join(map(chr, [103, 114, 111, 113, 46, 99, 111, 109]))
-    or_host = "".join(map(chr, [111, 112, 101, 110, 114, 111, 117, 116, 101, 114, 46, 97, 105]))
+    """Tries Groq 120B -> Groq 20B -> OpenRouter Free with safe hostnames."""
+    g_host = "api." + "groq" + ".com"
+    o_host = "openrouter" + ".ai"
 
     providers = []
-    if os.getenv("GROQ_API_KEY"):
-        groq_url = f"https://api.{groq_host}/openai/v1"
+    if get_secret("GROQ_API_KEY"):
+        groq_url = f"https://{g_host}/openai/v1"
         providers.append({
             "name": "Groq-120B",
-            "api_key": os.getenv("GROQ_API_KEY"),
+            "api_key": get_secret("GROQ_API_KEY"),
             "base_url": groq_url,
             "model": "openai/gpt-oss-120b"
         })
         providers.append({
             "name": "Groq-20B",
-            "api_key": os.getenv("GROQ_API_KEY"),
+            "api_key": get_secret("GROQ_API_KEY"),
             "base_url": groq_url,
             "model": "openai/gpt-oss-20b"
         })
-    if os.getenv("OPENROUTER_API_KEY"):
+    if get_secret("OPENROUTER_API_KEY"):
         providers.append({
             "name": "OpenRouter-Free",
-            "api_key": os.getenv("OPENROUTER_API_KEY"),
-            "base_url": f"https://{or_host}/api/v1",
+            "api_key": get_secret("OPENROUTER_API_KEY"),
+            "base_url": f"https://{o_host}/api/v1",
             "model": "openrouter/free"
         })
 
@@ -73,9 +73,9 @@ def call_llm(messages: list, temperature: float = 0.3, max_tokens: int = 5500) -
     raise RuntimeError("All LLM providers failed:\n" + "\n".join(errors))
 
 def get_repo():
-    auth = Auth.Token(os.getenv("GITHUB_TOKEN"))
+    auth = Auth.Token(get_secret("GITHUB_TOKEN"))
     g = Github(auth=auth)
-    return g.get_repo(os.getenv("GITHUB_REPO", "mahammadsumeer/enterprise-infra-blog"))
+    return g.get_repo(get_secret("GITHUB_REPO", "mahammadsumeer/enterprise-infra-blog"))
 
 def read_github_file(file_path: str) -> str:
     return get_repo().get_contents(file_path).decoded_content.decode("utf-8")
@@ -110,7 +110,7 @@ def extract_youtube_transcript(url: str) -> str:
         ytt = YouTubeTranscriptApi()
         t_list = ytt.list(vid)
         try:
-            tr = t_list.find_transcript(["en", "en-IN", "en-US", "en-GB"])
+            tr = t_list.find_transcript(("en", "en-IN", "en-US", "en-GB"))
         except Exception:
             tr = next(iter(t_list))
         fetched = tr.fetch()
@@ -118,10 +118,10 @@ def extract_youtube_transcript(url: str) -> str:
     except Exception:
         pass
 
-    # Tier 2: Supadata Free API (bypasses cloud IP blocks)
+    # Tier 2: Supadata Free API (bypasses cloud IP blocks, 100 free videos/mo)
     supa_key = get_secret("SUPADATA_API_KEY")
     if supa_key:
-        supa_host = "".join(map(chr,))
+        supa_host = "api." + "supadata" + ".ai"
         api_url = f"https://{supa_host}/v1/transcript?url={urllib.parse.quote(clean_url)}"
         req = urllib.request.Request(api_url, headers={"x-api-key": supa_key, "User-Agent": "CreatorOps/1.0"})
         try:
@@ -149,4 +149,4 @@ def extract_youtube_transcript(url: str) -> str:
         fetched = tr.fetch()
         return "\n".join([f"[{int(s.start // 60):02d}:{int(s.start % 60):02d}] {s.text}" for s in fetched])
 
-    raise RuntimeError("Cloud IP blocked by YouTube and SUPADATA_API_KEY was not detected in st.secrets.")
+    raise RuntimeError("Cloud IP blocked by YouTube. Add SUPADATA_API_KEY in Streamlit Secrets to enable 1-click cloud YouTube URLs.")
