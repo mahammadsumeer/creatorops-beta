@@ -1,9 +1,13 @@
 import os
+import json
+import urllib.request
+import urllib.parse
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
 from github import Github, Auth
 from openai import OpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig
 
 load_dotenv()
 
@@ -73,9 +77,10 @@ def push_to_github(file_path: str, content: str, commit_message: str) -> str:
         repo.create_file(file_path, commit_message, content)
         return f"Created {file_path}"
 
-def extract_youtube_transcript(url: str) -> str:
-    """Extracts timestamped YouTube transcript in English or ANY available language (Hindi, etc.)."""
-    u = urlparse(url.strip())
+def def extract_youtube_transcript(url: str) -> str:
+    """3-Tier Waterfall: Direct -> Supadata API (Free Tier) -> Webshare Residential Proxy."""
+    clean_url = url.strip()
+    u = urlparse(clean_url)
     v_list = parse_qs(u.query).get("v")
     if v_list:
         vid = next(iter(v_list))
@@ -85,18 +90,46 @@ def extract_youtube_transcript(url: str) -> str:
         vid = ""
     if len(vid) < 11:
         raise ValueError("Invalid YouTube URL. Please paste a standard YouTube video link.")
+    vid = vid[:11]
 
-    ytt = YouTubeTranscriptApi()
-    transcript_list = ytt.list(vid[:11])
+    # Tier 1: Direct fetch (works locally or on unblocked IPs)
     try:
-        transcript = transcript_list.find_transcript(["en", "en-IN", "en-US", "en-GB"])
+        ytt = YouTubeTranscriptApi()
+        t_list = ytt.list(vid)
+        try:
+            tr = t_list.find_transcript(["en", "en-IN", "en-US", "en-GB"])
+        except Exception:
+            tr = next(iter(t_list))
+        fetched = tr.fetch()
+        return "\n".join([f"[{int(s.start//60):02d}:{int(s.start%60):02d}] {s.text}" for s in fetched])
     except Exception:
-        transcript = next(iter(transcript_list))
+        pass
 
-    fetched = transcript.fetch()
-    lines = []
-    for snippet in fetched:
-        mins = int(snippet.start // 60)
-        secs = int(snippet.start % 60)
-        lines.append(f"[{mins:02d}:{secs:02d}] {snippet.text}")
-    return "\n".join(lines)
+    # Tier 2: Supadata Free API (bypasses cloud IP blocks, 100 free videos/mo)
+    supa_key = os.getenv("SUPADATA_API_KEY")
+    if supa_key:
+        api_url = f"https://api.supadata.ai/v1/transcript?url={urllib.parse.quote(clean_url)}"
+        req = urllib.request.Request(api_url, headers={"x-api-key": supa_key, "User-Agent": "CreatorOps/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            content = data.get("content", [])
+            if isinstance(content, list) and content:
+                lines = []
+                for seg in content:
+                    sec = int(seg.get("offset", 0) // 1000)
+                    lines.append(f"[{sec//60:02d}:{sec%60:02d}] {seg.get('text', '')}")
+                return "\n".join(lines)
+            elif isinstance(content, str) and content.strip():
+                return content.strip()
+
+    # Tier 3: Webshare Rotating Residential Proxy
+    ws_user = os.getenv("WEBSHARE_USER")
+    ws_pass = os.getenv("WEBSHARE_PASS")
+    if ws_user and ws_pass:
+        ytt = YouTubeTranscriptApi(proxy_config=WebshareProxyConfig(proxy_username=ws_user, proxy_password=ws_pass))
+        t_list = ytt.list(vid)
+        tr = next(iter(t_list))
+        fetched = tr.fetch()
+        return "\n".join([f"[{int(s.start//60):02d}:{int(s.start%60):02d}] {s.text}" for s in fetched])
+
+    raise RuntimeError("Cloud IP blocked by YouTube. Add SUPADATA_API_KEY (free tier) in Streamlit Secrets to enable 1-click cloud YouTube URLs.")
