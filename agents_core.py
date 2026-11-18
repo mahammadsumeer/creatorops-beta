@@ -11,6 +11,19 @@ from youtube_transcript_api.proxies import WebshareProxyConfig
 
 load_dotenv()
 
+def get_secret(key: str, default: str = "") -> str:
+    """Reads secret from environment variables or Streamlit Cloud st.secrets."""
+    val = os.getenv(key)
+    if val:
+        return val.strip()
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return str(st.secrets[key]).strip()
+    except Exception:
+        pass
+    return default
+
 def call_llm(messages: list, temperature: float = 0.3, max_tokens: int = 5500) -> str:
     """Tries Groq 120B -> Groq 20B -> OpenRouter Free with ASCII-safe hostnames."""
     groq_host = "".join(map(chr, [103, 114, 111, 113, 46, 99, 111, 109]))
@@ -92,7 +105,7 @@ def extract_youtube_transcript(url: str) -> str:
         raise ValueError("Invalid YouTube URL. Please paste a standard YouTube video link.")
     vid = vid[:11]
 
-    # Tier 1: Direct fetch
+    # Tier 1: Direct fetch (works locally)
     try:
         ytt = YouTubeTranscriptApi()
         t_list = ytt.list(vid)
@@ -105,27 +118,30 @@ def extract_youtube_transcript(url: str) -> str:
     except Exception:
         pass
 
-    # Tier 2: Supadata Free API (bypasses cloud IP blocks, 100 free videos/mo)
-    supa_key = os.getenv("SUPADATA_API_KEY")
+    # Tier 2: Supadata Free API (bypasses cloud IP blocks)
+    supa_key = get_secret("SUPADATA_API_KEY")
     if supa_key:
-        supa_host = "api." + "supadata.ai"
+        supa_host = "".join(map(chr,))
         api_url = f"https://{supa_host}/v1/transcript?url={urllib.parse.quote(clean_url)}"
         req = urllib.request.Request(api_url, headers={"x-api-key": supa_key, "User-Agent": "CreatorOps/1.0"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data.get("content", [])
-            if isinstance(content, list) and content:
-                lines = []
-                for seg in content:
-                    sec = int(seg.get("offset", 0) // 1000)
-                    lines.append(f"[{sec // 60:02d}:{sec % 60:02d}] {seg.get('text', '')}")
-                return "\n".join(lines)
-            elif isinstance(content, str) and content.strip():
-                return content.strip()
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                content = data.get("content", [])
+                if isinstance(content, list) and content:
+                    lines = []
+                    for seg in content:
+                        sec = int(seg.get("offset", 0) // 1000)
+                        lines.append(f"[{sec // 60:02d}:{sec % 60:02d}] {seg.get('text', '')}")
+                    return "\n".join(lines)
+                elif isinstance(content, str) and content.strip():
+                    return content.strip()
+        except Exception as supa_err:
+            raise RuntimeError(f"Supadata API error: {supa_err}") from supa_err
 
     # Tier 3: Webshare Rotating Residential Proxy
-    ws_user = os.getenv("WEBSHARE_USER")
-    ws_pass = os.getenv("WEBSHARE_PASS")
+    ws_user = get_secret("WEBSHARE_USER")
+    ws_pass = get_secret("WEBSHARE_PASS")
     if ws_user and ws_pass:
         ytt = YouTubeTranscriptApi(proxy_config=WebshareProxyConfig(proxy_username=ws_user, proxy_password=ws_pass))
         t_list = ytt.list(vid)
@@ -133,4 +149,4 @@ def extract_youtube_transcript(url: str) -> str:
         fetched = tr.fetch()
         return "\n".join([f"[{int(s.start // 60):02d}:{int(s.start % 60):02d}] {s.text}" for s in fetched])
 
-    raise RuntimeError("Cloud IP blocked by YouTube. Add SUPADATA_API_KEY in Streamlit Secrets to enable 1-click cloud YouTube URLs.")
+    raise RuntimeError("Cloud IP blocked by YouTube and SUPADATA_API_KEY was not detected in st.secrets.")
