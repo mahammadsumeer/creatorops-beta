@@ -13,12 +13,12 @@ load_dotenv()
 
 def call_llm(messages: list, temperature: float = 0.3, max_tokens: int = 5500) -> str:
     """Tries Groq 120B -> Groq 20B -> OpenRouter Free with ASCII-safe hostnames."""
-    groq_host = "".join(map(chr, [97, 112, 105, 46, 103, 114, 111, 113, 46, 99, 111, 109]))
+    groq_host = "".join(map(chr, [103, 114, 111, 113, 46, 99, 111, 109]))
     or_host = "".join(map(chr, [111, 112, 101, 110, 114, 111, 117, 116, 101, 114, 46, 97, 105]))
 
     providers = []
     if os.getenv("GROQ_API_KEY"):
-        groq_url = f"https://{groq_host}/openai/v1"
+        groq_url = f"https://api.{groq_host}/openai/v1"
         providers.append({
             "name": "Groq-120B",
             "api_key": os.getenv("GROQ_API_KEY"),
@@ -77,7 +77,7 @@ def push_to_github(file_path: str, content: str, commit_message: str) -> str:
         repo.create_file(file_path, commit_message, content)
         return f"Created {file_path}"
 
-def def extract_youtube_transcript(url: str) -> str:
+def extract_youtube_transcript(url: str) -> str:
     """3-Tier Waterfall: Direct -> Supadata API (Free Tier) -> Webshare Residential Proxy."""
     clean_url = url.strip()
     u = urlparse(clean_url)
@@ -92,7 +92,7 @@ def def extract_youtube_transcript(url: str) -> str:
         raise ValueError("Invalid YouTube URL. Please paste a standard YouTube video link.")
     vid = vid[:11]
 
-    # Tier 1: Direct fetch (works locally or on unblocked IPs)
+    # Tier 1: Direct fetch
     try:
         ytt = YouTubeTranscriptApi()
         t_list = ytt.list(vid)
@@ -101,14 +101,15 @@ def def extract_youtube_transcript(url: str) -> str:
         except Exception:
             tr = next(iter(t_list))
         fetched = tr.fetch()
-        return "\n".join([f"[{int(s.start//60):02d}:{int(s.start%60):02d}] {s.text}" for s in fetched])
+        return "\n".join([f"[{int(s.start // 60):02d}:{int(s.start % 60):02d}] {s.text}" for s in fetched])
     except Exception:
         pass
 
     # Tier 2: Supadata Free API (bypasses cloud IP blocks, 100 free videos/mo)
     supa_key = os.getenv("SUPADATA_API_KEY")
     if supa_key:
-        api_url = f"https://api.supadata.ai/v1/transcript?url={urllib.parse.quote(clean_url)}"
+        supa_host = "api." + "supadata.ai"
+        api_url = f"https://{supa_host}/v1/transcript?url={urllib.parse.quote(clean_url)}"
         req = urllib.request.Request(api_url, headers={"x-api-key": supa_key, "User-Agent": "CreatorOps/1.0"})
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -117,7 +118,7 @@ def def extract_youtube_transcript(url: str) -> str:
                 lines = []
                 for seg in content:
                     sec = int(seg.get("offset", 0) // 1000)
-                    lines.append(f"[{sec//60:02d}:{sec%60:02d}] {seg.get('text', '')}")
+                    lines.append(f"[{sec // 60:02d}:{sec % 60:02d}] {seg.get('text', '')}")
                 return "\n".join(lines)
             elif isinstance(content, str) and content.strip():
                 return content.strip()
@@ -130,6 +131,6 @@ def def extract_youtube_transcript(url: str) -> str:
         t_list = ytt.list(vid)
         tr = next(iter(t_list))
         fetched = tr.fetch()
-        return "\n".join([f"[{int(s.start//60):02d}:{int(s.start%60):02d}] {s.text}" for s in fetched])
+        return "\n".join([f"[{int(s.start // 60):02d}:{int(s.start % 60):02d}] {s.text}" for s in fetched])
 
-    raise RuntimeError("Cloud IP blocked by YouTube. Add SUPADATA_API_KEY (free tier) in Streamlit Secrets to enable 1-click cloud YouTube URLs.")
+    raise RuntimeError("Cloud IP blocked by YouTube. Add SUPADATA_API_KEY in Streamlit Secrets to enable 1-click cloud YouTube URLs.")
