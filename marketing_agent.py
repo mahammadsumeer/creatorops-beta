@@ -102,7 +102,7 @@ def discover_and_invite_youtubers(max_invites=5):
         if not valid_emails:
             continue
 
-        target_email = valid_emails[0]
+        target_email = next(iter(valid_emails))[0]
         if target_email in contacted_emails or target_email in existing_trials:
             continue
 
