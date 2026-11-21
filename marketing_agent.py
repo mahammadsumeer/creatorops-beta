@@ -44,7 +44,6 @@ def discover_and_invite_youtubers(max_invites=5):
     contacted_channels = {entry.get("channel_id", "") for entry in log}
     existing_trials = {t.get("email", "").lower() for t in load_trials()}
 
-    # Rotate niche daily based on day of year
     niche = OUTREACH_NICHES[datetime.now(timezone.utc).timetuple().tm_yday % len(OUTREACH_NICHES)]
     yt_host = "www." + "googleapis" + ".com"
     search_url = (
@@ -65,16 +64,17 @@ def discover_and_invite_youtubers(max_invites=5):
         cid = snip.get("channelId")
         if cid and cid not in contacted_channels and cid not in channel_videos:
             channel_videos[cid] = {
-		"video_desc": snip.get("description", "")
                 "channel_title": snip.get("channelTitle", ""),
-                "video_title": snip.get("title", "")
+                "video_title": snip.get("title", ""),
+                "video_desc": snip.get("description", "")
             }
 
     if not channel_videos:
         print("[INFO] No new channels found in this batch.")
+        save_outreach_log(log)
         return
 
-    cids_param = ",".join(list(channel_videos.keys())[:25])
+    cids_param = ",".join(list(channel_videos.keys())[:50])
     channels_url = f"https://{yt_host}/youtube/v3/channels?part=snippet,statistics&id={cids_param}&key={yt_key}"
     try:
         with urllib.request.urlopen(channels_url, timeout=20) as resp:
@@ -92,10 +92,11 @@ def discover_and_invite_youtubers(max_invites=5):
         desc = snip.get("description", "")
         subs = int(ch.get("statistics", {}).get("subscriberCount", 0))
 
-        # Target creators with 2k - 500k subscribers who list a public business email
         if subs < 2000 or subs > 500000:
             continue
-        emails_found = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", desc)
+
+        combined_text = desc + "\n" + channel_videos[cid].get("video_desc", "")
+        emails_found = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", combined_text)
         valid_emails = [
             e.lower() for e in emails_found
             if not e.lower().endswith((".png", ".jpg", "example.com", "sentry.io"))
@@ -103,7 +104,7 @@ def discover_and_invite_youtubers(max_invites=5):
         if not valid_emails:
             continue
 
-        target_email = next(iter(valid_emails))[0]
+        target_email = next(iter(valid_emails))
         if target_email in contacted_emails or target_email in existing_trials:
             continue
 
@@ -144,8 +145,7 @@ def discover_and_invite_youtubers(max_invites=5):
         except Exception as e:
             print(f"[WARN] Failed sending invite to {target_email}: {e}")
 
-    if sent_count > 0:
-        save_outreach_log(log)
+    save_outreach_log(log)
     print(f"[OK] YouTube discovery finished. Invites sent: {sent_count}")
 
 def check_inbox_and_reply(trials):
