@@ -150,3 +150,87 @@ def extract_youtube_transcript(url: str) -> str:
         return "\n".join([f"[{int(s.start // 60):02d}:{int(s.start % 60):02d}] {s.text}" for s in fetched])
 
     raise RuntimeError("Cloud IP blocked by YouTube. Add SUPADATA_API_KEY in Streamlit Secrets to enable 1-click cloud YouTube URLs.")
+
+
+import random
+import string
+import smtplib
+from datetime import datetime, timedelta, timezone
+from email.mime.text import MIMEText
+
+def send_gmail(to_email, subject, body):
+    user = get_secret("GMAIL_USER")
+    pwd = get_secret("GMAIL_APP_PASSWORD")
+    if not user or not pwd:
+        raise RuntimeError("GMAIL_USER or GMAIL_APP_PASSWORD missing in Secrets.")
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = f"CreatorOps AI <{user}>"
+    msg["To"] = to_email
+    host = "smtp." + "gmail" + ".com"
+    with smtplib.SMTP_SSL(host, 465) as s:
+        s.login(user, pwd)
+        s.sendmail(user, to_email, msg.as_string())
+
+def load_trials():
+    try:
+        repo_name = get_secret("TRIALS_REPO", "mahammadsumeer/creatorops-beta")
+        repo = Github(auth=Auth.Token(get_secret("GITHUB_TOKEN"))).get_repo(repo_name)
+        raw = repo.get_contents("trials.json").decoded_content.decode("utf-8")
+        return json.loads(raw)
+    except Exception:
+        return []
+
+def save_trials(trials):
+    repo_name = get_secret("TRIALS_REPO", "mahammadsumeer/creatorops-beta")
+    repo = Github(auth=Auth.Token(get_secret("GITHUB_TOKEN"))).get_repo(repo_name)
+    content = json.dumps(trials, indent=2)
+    try:
+        c = repo.get_contents("trials.json")
+        repo.update_file(c.path, "Update 3-day trial registry", content, c.sha)
+    except Exception:
+        repo.create_file("trials.json", "Create 3-day trial registry", content)
+
+def create_3day_trial(email, channel_url=""):
+    email = email.strip().lower()
+    trials = load_trials()
+    now = datetime.now(timezone.utc)
+    for t in trials:
+        if t.get("email") == email and datetime.fromisoformat(t["expires_at"]) > now:
+            return t["code"], t["expires_at"]
+    code = "TRIAL-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    expires = now + timedelta(hours=72)
+    trials.append({
+        "email": email,
+        "channel_url": channel_url.strip(),
+        "code": code,
+        "created_at": now.isoformat(),
+        "expires_at": expires.isoformat(),
+        "day2_sent": False,
+        "day3_sales_sent": False,
+        "feedback_log": []
+    })
+    save_trials(trials)
+    body = (
+        f"Hi there!\n\nYour free 3-day full-access trial to CreatorOps AI is ready.\n\n"
+        f"Your Personal Access Code: {code}\n"
+        f"Valid Until: {expires.strftime('%Y-%m-%d %H:%M UTC')} (72 hours)\n\n"
+        f"Start in 30 seconds at https://streamlit.app\n"
+        f"Reply directly to this email anytime with feedback or questions!\n\n- CreatorOps AI Team"
+    )
+    send_gmail(email, f"Your CreatorOps AI 3-Day Trial Code: {code}", body)
+    return code, expires.isoformat()
+
+def verify_trial_code(code):
+    code = code.strip().upper()
+    if not code.startswith("TRIAL-"):
+        return False, ""
+    now = datetime.now(timezone.utc)
+    for t in load_trials():
+        if t.get("code") == code:
+            exp = datetime.fromisoformat(t["expires_at"])
+            if now < exp:
+                hrs = round((exp - now).total_seconds() / 3600, 1)
+                return True, f"{t['email']} ({hrs}h left)"
+            return False, "EXPIRED"
+    return False, ""

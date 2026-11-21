@@ -1,42 +1,86 @@
 import os
 import json
 import streamlit as st
-from agents_core import call_llm, read_github_file, push_to_github, extract_youtube_transcript
+from agents_core import (
+    get_secret, call_llm, read_github_file, push_to_github,
+    extract_youtube_transcript, create_3day_trial, verify_trial_code, load_trials
+)
 
-st.set_page_config(page_title="CreatorOps AI & Agent Command Center", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="CreatorOps AI — 1 Video to 15 Assets & Brand Deals", page_icon="🚀", layout="wide")
 
-# --- 1. ROLE-BASED AUTHENTICATION (ADMIN VS. CUSTOMER BETA) ---
 if "role" not in st.session_state:
     st.session_state.role = None
+if "trial_info" not in st.session_state:
+    st.session_state.trial_info = ""
 
+# --- 1. PUBLIC LANDING PAGE + 72-HOUR TRIAL CAPTURE & LOGIN ---
 if not st.session_state.role:
-    col_l, col_m, col_r = st.columns([1, 1.4, 1])
-    with col_m:
-        st.title("🚀 CreatorOps AI")
-        st.subheader("Turn 1 Video Into 15 Platform-Native Assets & Brand Deals in 30 Seconds")
-        st.markdown("Sign in with your **Beta Access Code** or **Admin Password** to continue.")
+    st.markdown("## 🚀 CreatorOps AI")
+    st.title("Turn One 30-Minute Video Into 15 Platform-Native Assets & Brand Deals in 30 Seconds")
+    st.markdown(
+        "Built for **YouTubers, Podcasters & Educators recording 30+ minute camera/mic videos**. "
+        "Clone your exact brand voice, extract viral short-form clip timestamps, generate a full week of posts, "
+        "and price brand sponsorships accurately."
+    )
+    st.divider()
+
+    col_trial, col_login = st.columns([1.3, 1])
+
+    with col_trial:
+        st.subheader("🎁 Start Your Free 3-Day Full-Access Trial")
+        st.write("Enter your email below. Our AI agent will immediately send your personal **72-hour access code**.")
+        trial_email = st.text_input("Your Best Email Address", placeholder="you@yourchannel.com")
+        channel_url = st.text_input("Your YouTube Channel Link (Optional)", placeholder="https://youtube.com")
+        if st.button("✉️ Send My Free 3-Day Access Code", type="primary", use_container_width=True):
+            if "@" not in trial_email or "." not in trial_email:
+                st.warning("Please enter a valid email address.")
+            else:
+                with st.spinner("Generating your 72-hour trial code & sending email..."):
+                    try:
+                        code, exp = create_3day_trial(trial_email, channel_url)
+                        st.success(f"Sent! Check **{trial_email}** (and Spam/Promotions) for your 3-day code (`{code}`).")
+                    except Exception as e:
+                        st.error(f"Could not send trial email: {e}")
+
+    with col_login:
+        st.subheader("🔑 Already Have a Code? Sign In")
+        st.write("Enter your **3-Day Trial Code (`TRIAL-XXXXXX`)**, Beta Code, or Admin Password.")
         access_key = st.text_input("Access Code / Password", type="password")
-        if st.button("Enter Workspace", type="primary", use_container_width=True):
-            admin_pwd = os.getenv("ADMIN_PASSWORD") or os.getenv("DASHBOARD_PASSWORD", "admin123")
-            beta_code = os.getenv("BETA_ACCESS_CODE", "CREATORBETA2026")
+        if st.button("Enter Workspace", use_container_width=True):
+            admin_pwd = get_secret("ADMIN_PASSWORD") or get_secret("DASHBOARD_PASSWORD", "admin123")
+            beta_code = get_secret("BETA_ACCESS_CODE", "CREATORBETA2026")
             if access_key == admin_pwd:
                 st.session_state.role = "admin"
                 st.rerun()
             elif access_key == beta_code:
                 st.session_state.role = "customer"
+                st.session_state.trial_info = "VIP Beta Access"
                 st.rerun()
             else:
-                st.error("Invalid Access Code or Password.")
+                valid, info = verify_trial_code(access_key)
+                if valid:
+                    st.session_state.role = "customer"
+                    st.session_state.trial_info = info
+                    st.rerun()
+                elif info == "EXPIRED":
+                    st.error("Your 3-day trial code has expired! Reply to our email with 'UPGRADE' for Founder access.")
+                else:
+                    st.error("Invalid Access Code or Password.")
+
+    st.divider()
+    c1, c2, c3 = st.columns(3)
+    c1.markdown("### ✂️ Viral Clip Timestamps\nFinds the top 3 high-retention `[MM:SS]` segments in your 30-min video for CapCut/Premiere.")
+    c2.markdown("### 📱 15 Ready-to-Post Assets\nGenerates Shorts scripts, LinkedIn carousels, X threads, IG captions, newsletter & SEO blog.")
+    c3.markdown("### 💰 Brand Deal Rate Card\nCalculates fair USD & INR sponsorship pricing, drafts sponsor pitches, and flags contract traps.")
     st.stop()
 
 is_admin = st.session_state.role == "admin"
-
 # --- 2. SHARED CREATOR WORKSPACE FUNCTIONS (AGENTS 1, 2 & 5) ---
 def render_creator_studio():
     st.header("🎬 1 Video → 15 Social Assets + Viral Clip Timestamps")
     col_in, col_voice = st.columns([1.2, 1])
     with col_in:
-        yt_url = st.text_input("Paste YouTube Video URL", placeholder="https://www.youtube.com/watch?v=...")
+        yt_url = st.text_input("Paste YouTube Video URL", placeholder="https://youtube.com...")
         cta_link = st.text_input("Your Call-to-Action Link (Optional)", placeholder="https://yournewsletter.com or channel URL")
         raw_script = st.text_area("Or Paste Raw Video Script / Transcript Directly", height=110)
     with col_voice:
@@ -186,23 +230,23 @@ def render_brand_deals():
             mime="text/markdown"
         )
         st.markdown(st.session_state.brand_deal_pack)
-
 # --- 3. SIDEBAR & ROLE-BASED ROUTING ---
 if is_admin:
     st.sidebar.title("🛡️ Admin Command Center")
     st.sidebar.success("Logged in as: **System Admin**")
-    st.sidebar.markdown("**Live Blog:** [enterprise-infra-blog.pages.dev](https://enterprise-infra-blog.pages.dev/)")
+    st.sidebar.markdown("**Live Blog:** [enterprise-infra-blog.pages.dev](https://pages.dev)")
     if st.sidebar.button("🚪 Logout"):
         st.session_state.role = None
         st.rerun()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "🎬 CreatorOps Studio",
         "💰 Brand Deals (Agent 5)",
+        "📣 Growth & Trials (Agent 6)",
         "🧪 Test Agent (Agent 3)",
         "🛡️ Web-Security (Agent 4)",
         "💬 Direct Agent Chat",
-        "⚙️ Admin & Blog Queue"
+        "⚙️ Blog Queue"
     ])
 
     with tab1:
@@ -210,6 +254,39 @@ if is_admin:
     with tab2:
         render_brand_deals()
     with tab3:
+        st.header("📣 Agent 6: 3-Day Trial Tracker & Daily Promo Generator")
+        col_g1, col_g2 = st.columns([1, 1.2])
+        with col_g1:
+            st.subheader("🚀 Generate Today's Promo Pack")
+            target_niche = st.text_input("Target Creator Niche Today", value="30+ Minute Tech, Podcast & Finance YouTubers")
+            if st.button("✨ Generate Daily Posts, Cold Email & YouTube Comments"):
+                with st.spinner("Agent 6: Writing daily promotional outreach pack..."):
+                    promo = call_llm([
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are Agent 6: Growth & Marketing Strategist for CreatorOps AI (https://streamlit.app). "
+                                "Target audience: Creators who film 30+ minute camera/podcast videos. "
+                                "Generate: 1) High-hook X/Twitter post, 2) LinkedIn authority post, "
+                                "3) Cold outreach email offering a free 3-day trial, and 4) 3 value-first YouTube comment templates."
+                            )
+                        },
+                        {"role": "user", "content": f"Target Niche: {target_niche}"}
+                    ])
+                    st.session_state.daily_promo = promo
+            if "daily_promo" in st.session_state:
+                st.markdown(st.session_state.daily_promo)
+
+        with col_g2:
+            st.subheader("📋 Active & Expired 3-Day Trials (`trials.json`)")
+            trials = load_trials()
+            if trials:
+                st.metric("Total Trial Signups", len(trials))
+                st.dataframe(trials, use_container_width=True)
+            else:
+                st.info("No trial signups recorded yet. Test signing up on the Landing Page to see live tracking!")
+
+    with tab4:
         st.header("🧪 Agent 3: Automated QA & Test Agent")
         test_mode = st.selectbox("Select Test Target", [
             "Audit Generated 15 CreatorOps Assets",
@@ -228,7 +305,7 @@ if is_admin:
                 elif "Blog Lab" in test_mode:
                     curr = json.loads(read_github_file("agent/curriculum.json"))
                     done = [c for c in curr if c.get("done")]
-                    latest = done[-1] if done else curr[0]
+                    latest = done[-1] if done else curr
                     target = read_github_file(f"content/posts/{latest['slug']}.md")
                     instr = f"Audit `{latest['slug']}.md`: check YAML frontmatter, >1500 words, and double-quoted Mermaid labels."
                 else:
@@ -238,7 +315,7 @@ if is_admin:
                     {"role": "system", "content": "You are Agent 3: Principal QA Automation & SDET Engineer."},
                     {"role": "user", "content": f"{instr}\n\nDATA:\n{target[:20000]}"}
                 ]))
-    with tab4:
+    with tab5:
         st.header("🛡️ Agent 4: Web-Security & AppSec Auditor")
         sec_task = st.selectbox("Select Security Scan", [
             "Scan GitHub Blog Repo for Exposed Secrets & Workflow Risks",
@@ -265,14 +342,15 @@ if is_admin:
                     {"role": "system", "content": "You are Agent 4: Principal Application Security Engineer & Pentester."},
                     {"role": "user", "content": f"{prompt}\n\nTARGET:\n{payload[:20000]}"}
                 ]))
-    with tab5:
-        st.header("💬 Direct Chat With Any of Your 5 Agents")
+    with tab6:
+        st.header("💬 Direct Chat With Any of Your 6 Agents")
         agent_choice = st.selectbox("Choose Agent", [
             "Agent 1: Transcript, Viral Clip & Brand Voice Analyst",
             "Agent 2: 1-to-15 Content Multiplier",
             "Agent 3: Automated QA & Test Engineer",
             "Agent 4: Principal Web-Security Architect",
-            "Agent 5: Brand Deal & Sponsorship Strategist"
+            "Agent 5: Brand Deal & Sponsorship Strategist",
+            "Agent 6: Growth, Marketing & Trial Lifecycle Agent"
         ])
         if "chat_history" not in st.session_state:
             st.session_state.chat_history = []
@@ -293,9 +371,8 @@ if is_admin:
                     ])
                     st.markdown(reply)
                     st.session_state.chat_history.append({"role": "assistant", "content": reply})
-    with tab6:
-        st.header("⚙️ Admin Controls & Enterprise Infra Blog Queue")
-        st.info(f"**Customer Beta Access Code:** `{os.getenv('BETA_ACCESS_CODE', 'CREATORBETA2026')}` (Share this code with beta testers)")
+    with tab7:
+        st.header("⚙️ Enterprise Infra Blog Curriculum Queue")
         try:
             curr_raw = read_github_file("agent/curriculum.json")
             curr_data = json.loads(curr_raw)
@@ -322,8 +399,10 @@ if is_admin:
             st.error(f"Could not load blog curriculum: {e}")
 
 else:
-    # --- CUSTOMER BETA STOREFRONT VIEW ---
-    st.sidebar.title("🚀 CreatorOps Beta")
+    # --- CUSTOMER TRIAL / BETA STOREFRONT VIEW ---
+    st.sidebar.title("🚀 CreatorOps AI")
+    if st.session_state.trial_info:
+        st.sidebar.success(f"Status: **{st.session_state.trial_info}**")
     st.sidebar.info(
         "**Your Creator Toolkit:**\n"
         "- ✂️ Viral Clip Timestamp Finder\n"
@@ -332,6 +411,7 @@ else:
     )
     if st.sidebar.button("🚪 Logout"):
         st.session_state.role = None
+        st.session_state.trial_info = ""
         st.rerun()
 
     c_tab1, c_tab2 = st.tabs(["🎬 1 Video → 15 Assets & Viral Clips", "💰 Brand Deal Rate Card & Pitches"])
