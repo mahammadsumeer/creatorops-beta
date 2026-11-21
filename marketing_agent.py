@@ -49,7 +49,7 @@ def discover_and_invite_youtubers(max_invites=5):
     yt_host = "www." + "googleapis" + ".com"
     search_url = (
         f"https://{yt_host}/youtube/v3/search?part=snippet&type=video&videoDuration=long"
-        f"&maxResults=25&order=relevance&q={urllib.parse.quote(niche)}&key={yt_key}"
+        f"&maxResults=50&order=relevance&q={urllib.parse.quote(niche)}&key={yt_key}"
     )
 
     try:
@@ -65,6 +65,7 @@ def discover_and_invite_youtubers(max_invites=5):
         cid = snip.get("channelId")
         if cid and cid not in contacted_channels and cid not in channel_videos:
             channel_videos[cid] = {
+		"video_desc": snip.get("description", "")
                 "channel_title": snip.get("channelTitle", ""),
                 "video_title": snip.get("title", "")
             }
