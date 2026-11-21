@@ -1,9 +1,151 @@
 import os
+import re
+import json
 import imaplib
 import email
+import urllib.request
+import urllib.parse
 from datetime import datetime, timezone
 from email.header import decode_header
-from agents_core import get_secret, call_llm, send_gmail, load_trials, save_trials
+from agents_core import get_secret, call_llm, send_gmail, load_trials, save_trials, read_github_file, push_to_github
+
+OUTREACH_NICHES = [
+    "cloud computing architecture tutorial",
+    "AI engineering deep dive podcast",
+    "personal finance investing masterclass",
+    "cybersecurity ethical hacking full course",
+    "startup founder interview podcast"
+]
+
+def load_outreach_log():
+    try:
+        raw = read_github_file("outreach_log.json", "TRIALS_REPO", "mahammadsumeer/creatorops-beta")
+        return json.loads(raw)
+    except Exception:
+        return []
+
+def save_outreach_log(log):
+    push_to_github(
+        "outreach_log.json",
+        json.dumps(log, indent=2),
+        "Update YouTube creator outreach log",
+        "TRIALS_REPO",
+        "mahammadsumeer/creatorops-beta"
+    )
+
+def discover_and_invite_youtubers(max_invites=5):
+    yt_key = get_secret("YOUTUBE_API_KEY")
+    if not yt_key:
+        print("[INFO] YOUTUBE_API_KEY not set; skipping YouTube channel discovery.")
+        return
+
+    log = load_outreach_log()
+    contacted_emails = {entry.get("email", "").lower() for entry in log}
+    contacted_channels = {entry.get("channel_id", "") for entry in log}
+    existing_trials = {t.get("email", "").lower() for t in load_trials()}
+
+    # Rotate niche daily based on day of year
+    niche = OUTREACH_NICHES[datetime.now(timezone.utc).timetuple().tm_yday % len(OUTREACH_NICHES)]
+    yt_host = "www." + "googleapis" + ".com"
+    search_url = (
+        f"https://{yt_host}/youtube/v3/search?part=snippet&type=video&videoDuration=long"
+        f"&maxResults=25&order=relevance&q={urllib.parse.quote(niche)}&key={yt_key}"
+    )
+
+    try:
+        with urllib.request.urlopen(search_url, timeout=20) as resp:
+            items = json.loads(resp.read().decode("utf-8")).get("items", [])
+    except Exception as e:
+        print(f"[WARN] YouTube search failed: {e}")
+        return
+
+    channel_videos = {}
+    for item in items:
+        snip = item.get("snippet", {})
+        cid = snip.get("channelId")
+        if cid and cid not in contacted_channels and cid not in channel_videos:
+            channel_videos[cid] = {
+                "channel_title": snip.get("channelTitle", ""),
+                "video_title": snip.get("title", "")
+            }
+
+    if not channel_videos:
+        print("[INFO] No new channels found in this batch.")
+        return
+
+    cids_param = ",".join(list(channel_videos.keys())[:25])
+    channels_url = f"https://{yt_host}/youtube/v3/channels?part=snippet,statistics&id={cids_param}&key={yt_key}"
+    try:
+        with urllib.request.urlopen(channels_url, timeout=20) as resp:
+            ch_items = json.loads(resp.read().decode("utf-8")).get("items", [])
+    except Exception as e:
+        print(f"[WARN] YouTube channels lookup failed: {e}")
+        return
+
+    sent_count = 0
+    for ch in ch_items:
+        if sent_count >= max_invites:
+            break
+        cid = ch.get("id", "")
+        snip = ch.get("snippet", {})
+        desc = snip.get("description", "")
+        subs = int(ch.get("statistics", {}).get("subscriberCount", 0))
+
+        # Target creators with 2k - 500k subscribers who list a public business email
+        if subs < 2000 or subs > 500000:
+            continue
+        emails_found = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", desc)
+        valid_emails = [
+            e.lower() for e in emails_found
+            if not e.lower().endswith((".png", ".jpg", "example.com", "sentry.io"))
+        ]
+        if not valid_emails:
+            continue
+
+        target_email = valid_emails[0]
+        if target_email in contacted_emails or target_email in existing_trials:
+            continue
+
+        ch_title = channel_videos[cid]["channel_title"]
+        vid_title = channel_videos[cid]["video_title"]
+
+        pitch = call_llm([
+            {
+                "role": "system",
+                "content": (
+                    "You are the Founder of CreatorOps AI (https://streamlit.app). "
+                    "Write a short, respectful, non-spammy 85-word cold outreach email to a YouTube creator who makes 30+ minute videos. "
+                    "Reference their recent long-form video title naturally, explain how CreatorOps AI turns 1 long video into "
+                    "3 timestamped Shorts clips, 15 LinkedIn/X/newsletter posts, and a Sponsor Rate Card in 30 seconds, "
+                    "and invite them to claim a free 3-day full-access trial at https://streamlit.app."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Channel: {ch_title} ({subs:,} subscribers) | Recent Long Video: {vid_title}"
+            }
+        ], temperature=0.4)
+
+        try:
+            send_gmail(target_email, f"Quick idea for {ch_title}'s long-form videos", pitch)
+            log.append({
+                "channel_id": cid,
+                "channel_title": ch_title,
+                "email": target_email,
+                "subscribers": subs,
+                "video_title": vid_title,
+                "sent_at": datetime.now(timezone.utc).isoformat()
+            })
+            contacted_emails.add(target_email)
+            contacted_channels.add(cid)
+            sent_count += 1
+            print(f"[SENT] Cold trial invite sent to {ch_title} ({target_email})")
+        except Exception as e:
+            print(f"[WARN] Failed sending invite to {target_email}: {e}")
+
+    if sent_count > 0:
+        save_outreach_log(log)
+    print(f"[OK] YouTube discovery finished. Invites sent: {sent_count}")
 
 def check_inbox_and_reply(trials):
     user = get_secret("GMAIL_USER")
@@ -17,11 +159,11 @@ def check_inbox_and_reply(trials):
         mail.login(user, pwd)
         mail.select("INBOX")
         _, msgs = mail.search(None, "UNSEEN")
-        for num in msgs.split():
+        for num in msgs[0].split():
             _, data = mail.fetch(num, "(RFC822)")
-            msg = email.message_from_bytes(data)
-            sender = email.utils.parseaddr(msg.get("From", "")).lower()
-            subj = str(decode_header(msg.get("Subject", "")))
+            msg = email.message_from_bytes(data[0][1])
+            sender = email.utils.parseaddr(msg.get("From", ""))[1].lower()
+            subj = str(decode_header(msg.get("Subject", ""))[0][0])
             body = ""
             if msg.is_multipart():
                 for part in msg.walk():
@@ -72,6 +214,7 @@ def run_lifecycle_agent():
             changed = True
     if changed or any(t.get("feedback_log") for t in trials):
         save_trials(trials)
+    discover_and_invite_youtubers(max_invites=5)
     print("[OK] Marketing & Lifecycle Agent finished.")
 
 if __name__ == "__main__":

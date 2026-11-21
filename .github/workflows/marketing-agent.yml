@@ -23,4 +23,5 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+	  YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
         run: python marketing_agent.py
