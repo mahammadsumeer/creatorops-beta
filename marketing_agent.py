@@ -8,6 +8,8 @@ import urllib.parse
 from datetime import datetime, timezone
 from email.header import decode_header
 from agents_core import get_secret, call_llm, send_gmail, load_trials, save_trials, read_github_file, push_to_github
+from github import Github, Auth
+from agents_core import get_secret, call_llm, send_gmail, load_trials, save_trials
 
 OUTREACH_NICHES = [
     "cloud computing architecture tutorial",
@@ -19,19 +21,22 @@ OUTREACH_NICHES = [
 
 def load_outreach_log():
     try:
-        raw = read_github_file("outreach_log.json", "TRIALS_REPO", "mahammadsumeer/creatorops-beta")
+        repo_name = get_secret("TRIALS_REPO", "mahammadsumeer/creatorops-beta")
+        repo = Github(auth=Auth.Token(get_secret("GITHUB_TOKEN"))).get_repo(repo_name)
+        raw = repo.get_contents("outreach_log.json").decoded_content.decode("utf-8")
         return json.loads(raw)
     except Exception:
         return []
 
 def save_outreach_log(log):
-    push_to_github(
-        "outreach_log.json",
-        json.dumps(log, indent=2),
-        "Update YouTube creator outreach log",
-        "TRIALS_REPO",
-        "mahammadsumeer/creatorops-beta"
-    )
+    repo_name = get_secret("TRIALS_REPO", "mahammadsumeer/creatorops-beta")
+    repo = Github(auth=Auth.Token(get_secret("GITHUB_TOKEN"))).get_repo(repo_name)
+    content = json.dumps(log, indent=2)
+    try:
+        c = repo.get_contents("outreach_log.json")
+        repo.update_file(c.path, "Update YouTube creator outreach log", content, c.sha)
+    except Exception:
+        repo.create_file("outreach_log.json", "Create YouTube creator outreach log", content)
 
 def discover_and_invite_youtubers(max_invites=5):
     yt_key = get_secret("YOUTUBE_API_KEY")
