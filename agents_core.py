@@ -159,18 +159,40 @@ from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 
 def send_gmail(to_email, subject, body):
-    user = get_secret("GMAIL_USER")
+    sender = get_secret("GMAIL_USER")
+    brevo_key = get_secret("BREVO_API_KEY")
+    if brevo_key and sender:
+        b_host = "api." + "brevo" + ".com"
+        payload = json.dumps({
+            "sender": {"name": "CreatorOps AI", "email": sender},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "textContent": body
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"https://{b_host}/v3/smtp/email",
+            data=payload,
+            headers={"api-key": brevo_key, "Content-Type": "application/json", "Accept": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            resp.read()
+        return
+
     pwd = get_secret("GMAIL_APP_PASSWORD")
-    if not user or not pwd:
-        raise RuntimeError("GMAIL_USER or GMAIL_APP_PASSWORD missing in Secrets.")
+    if not sender or not pwd:
+        raise RuntimeError("Add BREVO_API_KEY (recommended for cloud) or GMAIL_USER + GMAIL_APP_PASSWORD in Secrets.")
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
-    msg["From"] = f"CreatorOps AI <{user}>"
+    msg["From"] = f"CreatorOps AI <{sender}>"
     msg["To"] = to_email
     host = "smtp." + "gmail" + ".com"
-    with smtplib.SMTP_SSL(host, 465) as s:
-        s.login(user, pwd)
-        s.sendmail(user, to_email, msg.as_string())
+    with smtplib.SMTP(host, 587, timeout=20) as s:
+        s.ehlo()
+        s.starttls()
+        s.ehlo()
+        s.login(sender, pwd)
+        s.sendmail(sender, to_email, msg.as_string())
+
 
 def load_trials():
     try:
